@@ -1,0 +1,59 @@
+name: Continuous Deployment of HUB Release to Target server
+
+on:
+  push:
+    branches:
+      - main
+      
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Establish SSH connection to target server
+        run: |
+          sshpass -p ${{ secrets.SSH_PASSWORD }} ssh -o StrictHostKeyChecking=no rsahoo@10.4.241.74 echo "SSH connection established"
+        env:
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+      - name: Check if sshpass is installed
+        run: |
+          echo "Checking if sshpass is installed..."
+          if ! command -v sshpass &> /dev/null
+          then
+              echo "sshpass is not installed. Installing..."
+              sudo apt-get update
+              sudo apt-get install -y sshpass
+          fi
+          echo "sshpass is installed."
+      - name: Checkout code from HUB Repo
+        uses: actions/checkout@v2
+        with:
+          repository: blackducksoftware/hub
+          ref: main
+          token: ${{ secrets.PAT }}
+      - name: Download Latest Release
+        id: download-release
+        run: |
+          echo "Downloading latest release..."
+          mkdir -p /var/opt/release
+          RELEASE_NAME=$(curl -s  https://api.github.com/repos/blackducksoftware/hub/releases/latest | jq -r '.name')
+          curl -sL $(curl -s  https://api.github.com/repos/blackducksoftware/hub/releases/latest | jq -r '.tarball_url') -o "hub-${RELEASE_NAME}.tar.gz"
+          echo "Latest release downloaded."
+      - name: Copy Release to Target Server
+        run: |
+          echo "Moving release to target server..."
+          sshpass -p ${{ secrets.SSH_PASSWORD }} scp -o StrictHostKeyChecking=no /var/opt/release/"hub-${RELEASE_NAME}.tar.gz" rsahoo@10.4.241.76:/tmp/
+          echo "Release moved to target server."
+        env:
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+      - name: Extract Release on Target Server
+        run: |
+          echo "Extracting release..."
+          sshpass -p ${{ secrets.SSH_PASSWORD }} ssh -o StrictHostKeyChecking=no rsahoo@10.4.241.74 "cd /tmp/ && tar -xvzf hub-${RELEASE_NAME}.tar.gz && mv blackducksoftware* hub-${RELEASE_NAME}"
+        env:
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+      - name: Deploy to Swarm
+        run: |
+          echo "Deploying to Swarm Cluster..."
+          sshpass -p ${{ secrets.SSH_PASSWORD }} ssh -o StrictHostKeyChecking=no rsahoo@10.4.241.74 "docker stack deploy -c /tmp/hub-${RELEASE_NAME}/docker-swarm/docker-compose.yml -c /tmp/hub-${RELEASE_NAME}/docker-swarm/sizes-gen04/120sph.yaml hub"
+        env:
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
